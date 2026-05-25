@@ -1,9 +1,12 @@
 {
   "name": "command-center",
   "version": "1.0.0",
-  "description": "Personal Command Center web app with ElevenLabs (Clyde) voice briefing",
+  "description": "Personal Command Center web app with Microsoft Edge neural voice briefing",
   "type": "commonjs",
   "engines": { "node": ">=18" },
   "scripts": { "start": "node server.js" },
-  "dependencies": { "express": "^4.19.2" }
+  "dependencies": {
+    "express": "^4.19.2",
+    "msedge-tts": "^1.3.0"
+  }
 }

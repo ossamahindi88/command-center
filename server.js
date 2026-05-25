@@ -1,20 +1,19 @@
 // Command Center — Node/Express backend
-// Serves the dashboard and proxies: ElevenLabs (Clyde) TTS, Todoist, FMP markets, prayer times.
-// Secrets live ONLY in environment variables (never in the frontend).
+// Voice via Microsoft Edge neural TTS (free, no key, works from a server).
+// Also proxies Todoist, FMP markets, and prayer times. Secrets live only in env vars.
 
 const express = require('express');
 const path = require('path');
+const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
-const EL_KEY = process.env.ELEVENLABS_API_KEY || '';
-const EL_VOICE = process.env.ELEVENLABS_VOICE_ID || '2EiwWnXFnvU5JabPnv8n'; // Clyde
+const TTS_VOICE = process.env.TTS_VOICE || 'en-GB-RyanNeural'; // British male neural
 const TODOIST = process.env.TODOIST_TOKEN || '';
 const FMP = process.env.FMP_API_KEY || '';
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
 
-// Lightweight gate: if APP_PASSWORD is set, API calls must send it (header or query).
 function auth(req, res, next) {
   if (!APP_PASSWORD) return next();
   const t = req.headers['x-cc-pass'] || req.query.pass;
@@ -22,42 +21,41 @@ function auth(req, res, next) {
   return res.status(401).json({ error: 'unauthorized' });
 }
 
-// Tell the frontend what's configured (no secrets revealed).
 app.get('/api/config', (req, res) => {
-  res.json({
-    needsPassword: !!APP_PASSWORD,
-    tts: !!EL_KEY,
-    todoist: !!TODOIST,
-    markets: !!FMP
-  });
+  res.json({ needsPassword: !!APP_PASSWORD, tts: true, todoist: !!TODOIST, markets: !!FMP, voice: TTS_VOICE });
 });
 
-// Verify password (used by the login gate).
 app.get('/api/check', auth, (req, res) => res.json({ ok: true }));
 
-// ElevenLabs TTS -> mp3 audio (Clyde by default)
+// Edge neural TTS -> mp3
+function synth(text, voice) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      const { audioStream } = tts.toStream(text);
+      const chunks = [];
+      const timer = setTimeout(() => reject(new Error('tts timeout')), 25000);
+      audioStream.on('data', d => chunks.push(d));
+      audioStream.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks)); });
+      audioStream.on('error', e => { clearTimeout(timer); reject(e); });
+    } catch (e) { reject(e); }
+  });
+}
+
 app.post('/api/tts', auth, async (req, res) => {
   try {
-    if (!EL_KEY) return res.status(400).json({ error: 'ELEVENLABS_API_KEY not set' });
-    const text = String((req.body && req.body.text) || '').slice(0, 2500);
+    const text = String((req.body && req.body.text) || '').slice(0, 2000);
     if (!text) return res.status(400).json({ error: 'no text' });
-    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${EL_VOICE}`, {
-      method: 'POST',
-      headers: { 'xi-api-key': EL_KEY, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
-      body: JSON.stringify({
-        text,
-        model_id: 'eleven_multilingual_v2',
-        voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-      })
-    });
-    if (!r.ok) { const e = await r.text(); return res.status(502).json({ error: 'tts failed', detail: e.slice(0, 300) }); }
+    const voice = (req.body && req.body.voice) || TTS_VOICE;
+    const buf = await synth(text, voice);
+    if (!buf || !buf.length) return res.status(502).json({ error: 'empty audio' });
     res.set('Content-Type', 'audio/mpeg');
     res.set('Cache-Control', 'no-store');
-    res.send(Buffer.from(await r.arrayBuffer()));
-  } catch (e) { res.status(500).json({ error: String(e) }); }
+    res.send(buf);
+  } catch (e) { res.status(502).json({ error: 'tts failed', detail: String(e).slice(0, 200) }); }
 });
 
-// Today's agenda from Todoist (prayer tasks excluded)
 app.get('/api/agenda', auth, async (req, res) => {
   try {
     if (!TODOIST) return res.json({ connected: false, tasks: [] });
@@ -71,7 +69,6 @@ app.get('/api/agenda', auth, async (req, res) => {
   } catch (e) { res.json({ connected: false, tasks: [], error: String(e) }); }
 });
 
-// US index quotes + market status from FMP
 app.get('/api/markets', auth, async (req, res) => {
   try {
     if (!FMP) return res.json({ connected: false });
@@ -80,7 +77,6 @@ app.get('/api/markets', auth, async (req, res) => {
   } catch (e) { res.json({ connected: false, error: String(e) }); }
 });
 
-// Riyadh prayer times (free, no key)
 app.get('/api/prayer', async (req, res) => {
   try {
     const r = await fetch('https://api.aladhan.com/v1/timingsByCity?city=Riyadh&country=Saudi%20Arabia&method=4');
