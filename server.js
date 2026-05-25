@@ -1,15 +1,14 @@
 // Command Center — Node/Express backend
-// Voice via Microsoft Edge neural TTS (free, no key, works from a server).
+// Voice via ttsMP3 (Amazon Polly) — reliable from a server, no key.
 // Also proxies Todoist, FMP markets, and prayer times. Secrets live only in env vars.
 
 const express = require('express');
 const path = require('path');
-const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
-const TTS_VOICE = process.env.TTS_VOICE || 'en-GB-RyanNeural'; // British male neural
+const TTS_VOICE = process.env.TTS_VOICE || 'Matthew'; // Polly voice (Matthew, Brian, Joey, Russell, Amy, Emma, Joanna, ...)
 const TODOIST = process.env.TODOIST_TOKEN || '';
 const FMP = process.env.FMP_API_KEY || '';
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
@@ -27,25 +26,27 @@ app.get('/api/config', (req, res) => {
 
 app.get('/api/check', auth, (req, res) => res.json({ ok: true }));
 
-// Edge neural TTS -> mp3
-function synth(text, voice) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const tts = new MsEdgeTTS();
-      await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-      const { audioStream } = tts.toStream(text);
-      const chunks = [];
-      const timer = setTimeout(() => reject(new Error('tts timeout')), 25000);
-      audioStream.on('data', d => chunks.push(d));
-      audioStream.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks)); });
-      audioStream.on('error', e => { clearTimeout(timer); reject(e); });
-    } catch (e) { reject(e); }
+// ttsMP3 (Amazon Polly) -> mp3
+async function synth(text, voice) {
+  const body = new URLSearchParams();
+  body.set('msg', text);
+  body.set('lang', voice);
+  body.set('source', 'ttsmp3');
+  const m = await fetch('https://ttsmp3.com/makemp3_new.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body: body.toString()
   });
+  const j = await m.json();
+  if (!j || !j.URL) throw new Error('ttsmp3 failed: ' + JSON.stringify(j).slice(0, 120));
+  const a = await fetch(j.URL);
+  if (!a.ok) throw new Error('mp3 fetch failed: ' + a.status);
+  return Buffer.from(await a.arrayBuffer());
 }
 
 app.post('/api/tts', auth, async (req, res) => {
   try {
-    const text = String((req.body && req.body.text) || '').slice(0, 2000);
+    const text = String((req.body && req.body.text) || '').slice(0, 2500);
     if (!text) return res.status(400).json({ error: 'no text' });
     const voice = (req.body && req.body.voice) || TTS_VOICE;
     const buf = await synth(text, voice);
