@@ -78,17 +78,28 @@ app.get('/api/agenda', auth, async (req, res) => {
   } catch (e) { res.json({ connected: false, tasks: [], error: String(e) }); }
 });
 
+async function yahooQuote(sym) {
+  try {
+    const r = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/' + sym + '?interval=1d&range=2d',
+      { headers: { 'User-Agent': 'Mozilla/5.0 (CommandCenter)' } });
+    const j = await r.json();
+    const meta = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
+    if (!meta) return null;
+    const price = meta.regularMarketPrice;
+    const prev = meta.chartPreviousClose != null ? meta.chartPreviousClose : meta.previousClose;
+    const pct = (price != null && prev) ? ((price - prev) / prev) * 100 : 0;
+    return { symbol: sym, price: price, changesPercentage: pct };
+  } catch (e) { return null; }
+}
+
 app.get('/api/markets', auth, async (req, res) => {
   try {
-    if (!FMP) return res.json({ connected: false });
-    // ETFs as proxies (SPY=S&P500, QQQ=Nasdaq, DIA=Dow). v3 is deprecated; use the new /stable/quote.
-    const r = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=SPY,QQQ,DIA&apikey=${FMP}`);
-    const txt = await r.text();
-    let q; try { q = JSON.parse(txt); } catch { return res.json({ connected: true, indices: [], debug: 'fmp non-json: ' + txt.slice(0, 120) }); }
-    if (!Array.isArray(q)) return res.json({ connected: true, indices: [], debug: 'fmp shape: ' + JSON.stringify(q).slice(0, 120) });
+    // ETFs as proxies — Yahoo Finance, free, no key required.
+    const syms = ['SPY', 'QQQ', 'DIA'];
+    const arr = await Promise.all(syms.map(yahooQuote));
     const map = { SPY: 'S&P 500', QQQ: 'Nasdaq 100', DIA: 'Dow Jones' };
-    const indices = q.map(x => Object.assign({}, x, { name: map[x.symbol] || x.name }));
-    res.json({ connected: true, indices });
+    const indices = arr.filter(Boolean).map(q => Object.assign(q, { name: map[q.symbol] || q.symbol }));
+    res.json({ connected: indices.length > 0, indices });
   } catch (e) { res.json({ connected: false, error: String(e) }); }
 });
 
