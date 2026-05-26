@@ -81,8 +81,8 @@ app.get('/api/agenda', auth, async (req, res) => {
 app.get('/api/markets', auth, async (req, res) => {
   try {
     if (!FMP) return res.json({ connected: false });
-    // ETFs as proxies (SPY=S&P500, QQQ=Nasdaq, DIA=Dow) — free FMP plans support these stock quotes
-    const r = await fetch(`https://financialmodelingprep.com/api/v3/quote/SPY,QQQ,DIA?apikey=${FMP}`);
+    // ETFs as proxies (SPY=S&P500, QQQ=Nasdaq, DIA=Dow). v3 is deprecated; use the new /stable/quote.
+    const r = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=SPY,QQQ,DIA&apikey=${FMP}`);
     const txt = await r.text();
     let q; try { q = JSON.parse(txt); } catch { return res.json({ connected: true, indices: [], debug: 'fmp non-json: ' + txt.slice(0, 120) }); }
     if (!Array.isArray(q)) return res.json({ connected: true, indices: [], debug: 'fmp shape: ' + JSON.stringify(q).slice(0, 120) });
