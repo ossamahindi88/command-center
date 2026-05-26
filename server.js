@@ -60,10 +60,18 @@ app.post('/api/tts', auth, async (req, res) => {
 app.get('/api/agenda', auth, async (req, res) => {
   try {
     if (!TODOIST) return res.json({ connected: false, tasks: [] });
-    const r = await fetch('https://api.todoist.com/rest/v2/tasks?filter=' + encodeURIComponent('today | overdue'),
-      { headers: { Authorization: 'Bearer ' + TODOIST } });
-    const arr = await r.json();
-    const tasks = (Array.isArray(arr) ? arr : [])
+    // Todoist unified API (v1). Fetch tasks then filter for today/overdue server-side.
+    const r = await fetch('https://api.todoist.com/api/v1/tasks?limit=200',
+      { headers: { Authorization: 'Bearer ' + TODOIST.trim() } });
+    const txt = await r.text();
+    let data; try { data = JSON.parse(txt); } catch { return res.json({ connected: false, tasks: [], error: 'todoist non-json: ' + txt.slice(0, 120) }); }
+    const list = Array.isArray(data) ? data : (data.results || data.items || data.tasks || []);
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const tasks = list
+      .filter(t => {
+        const d = (t.due && (t.due.date || t.due.datetime)) || '';
+        return d && d.slice(0, 10) <= todayISO;
+      })
       .filter(t => !/prayer|fajr|dhuhr|asr|maghrib|isha/i.test(t.content || ''))
       .map(t => ({ content: t.content, time: (t.due && (t.due.datetime || t.due.date)) || '' }));
     res.json({ connected: true, tasks });
@@ -73,8 +81,14 @@ app.get('/api/agenda', auth, async (req, res) => {
 app.get('/api/markets', auth, async (req, res) => {
   try {
     if (!FMP) return res.json({ connected: false });
-    const q = await (await fetch(`https://financialmodelingprep.com/api/v3/quote/%5EGSPC,%5EIXIC,%5EDJI?apikey=${FMP}`)).json();
-    res.json({ connected: true, indices: Array.isArray(q) ? q : [] });
+    // ETFs as proxies (SPY=S&P500, QQQ=Nasdaq, DIA=Dow) — free FMP plans support these stock quotes
+    const r = await fetch(`https://financialmodelingprep.com/api/v3/quote/SPY,QQQ,DIA?apikey=${FMP}`);
+    const txt = await r.text();
+    let q; try { q = JSON.parse(txt); } catch { return res.json({ connected: true, indices: [], debug: 'fmp non-json: ' + txt.slice(0, 120) }); }
+    if (!Array.isArray(q)) return res.json({ connected: true, indices: [], debug: 'fmp shape: ' + JSON.stringify(q).slice(0, 120) });
+    const map = { SPY: 'S&P 500', QQQ: 'Nasdaq 100', DIA: 'Dow Jones' };
+    const indices = q.map(x => Object.assign({}, x, { name: map[x.symbol] || x.name }));
+    res.json({ connected: true, indices });
   } catch (e) { res.json({ connected: false, error: String(e) }); }
 });
 
